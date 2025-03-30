@@ -423,6 +423,12 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
                         prompt_tokens: chunk?.usageMetadata?.promptTokenCount,
                         completion_tokens: chunk?.usageMetadata?.candidatesTokenCount,
                         total_tokens: chunk?.usageMetadata?.totalTokenCount,
+                        prompt_tokens_details: {
+                            cached_tokens: chunk?.usageMetadata?.cachedContentTokenCount,
+                        },
+                        completion_tokens_details: {
+                            reasoning_tokens: chunk?.usageMetadata?.thoughtsTokenCount,
+                        },
                     },
                 })}\n\n`));
 
@@ -515,6 +521,12 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
                 prompt_tokens: response?.usageMetadata?.promptTokenCount,
                 completion_tokens: response?.usageMetadata?.candidatesTokenCount,
                 total_tokens: response?.usageMetadata?.totalTokenCount,
+                prompt_tokens_details: {
+                    cached_tokens: response?.usageMetadata?.cachedContentTokenCount,
+                },
+                completion_tokens_details: {
+                    reasoning_tokens: response?.usageMetadata?.thoughtsTokenCount,
+                },
             },
         });
     } catch (e) {
