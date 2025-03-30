@@ -421,10 +421,10 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
                     }],
                 })}\n\n`));
 
-                totalTokenCount += chunk?.usageMetadata?.totalTokenCount || 0;
-                promptTokenCount += chunk?.usageMetadata?.promptTokenCount || 0;
-                candidatesTokenCount += chunk?.usageMetadata?.candidatesTokenCount || 0;
-                cachedContentTokenCount += chunk?.usageMetadata?.cachedContentTokenCount || 0;
+                totalTokenCount = chunk?.usageMetadata?.totalTokenCount || totalTokenCount;
+                promptTokenCount = chunk?.usageMetadata?.promptTokenCount || promptTokenCount;
+                candidatesTokenCount = chunk?.usageMetadata?.candidatesTokenCount || candidatesTokenCount;
+                cachedContentTokenCount = chunk?.usageMetadata?.cachedContentTokenCount || cachedContentTokenCount;
             }
 
             // 结束
