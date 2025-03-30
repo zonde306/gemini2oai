@@ -337,6 +337,10 @@ async function handleStream(key: string, model: string, generateParams: Generate
         console.error(e.message);
         console.error(e);
 
+        await writer.close();
+        await readable.cancel();
+        await writable.close();
+
         // @ts-expect-error: 18046
         throw new ApiError(e.message, { cause: e });
     }
@@ -512,14 +516,13 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
     const body = await request.json();
     const excluding = new Set<string>();
     let result = null;
-    let key = "";
 
     for(let i = 0; i < tokens.length; i++) {
+        const key = await getBestToken(tokens, body.model, excluding);
+        const prompts = await formattingMessages(body.messages, key);
+        const generateParams = prepareGenerateParams(body.model, prompts, body);
+        
         try {
-            key = await getBestToken(tokens, body.model, excluding);
-            const prompts = await formattingMessages(body.messages, key);
-            const generateParams = prepareGenerateParams(body.model, prompts, body);
-
             if(body.stream)
                 result = await handleStream(key, body.model, generateParams);
             else
@@ -531,7 +534,8 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
                 continue;
             }
 
-            throw e;
+            // @ts-expect-error: 18046
+            return new Response(e.message, { status: 400 });
         }
     }
     
