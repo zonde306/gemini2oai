@@ -333,13 +333,7 @@ async function handleStream(key: string, model: string, generateParams: Generate
     try {
         response = await ep.models.generateContentStream(generateParams);
     } catch (e) {
-        // @ts-expect-error: 18046
-        console.error(e.message);
         console.error(e);
-
-        await writer.close();
-        await readable.cancel();
-        await writable.close();
 
         // @ts-expect-error: 18046
         throw new ApiError(e.message, { cause: e });
@@ -496,8 +490,6 @@ async function handleNonStream(key: string, model: string, generateParams: Gener
             }]
         });
     } catch (e) {
-        // @ts-expect-error: 18046
-        console.error(e.message);
         console.error(e);
 
         // @ts-expect-error: 18046
@@ -521,7 +513,7 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
         const key = await getBestToken(tokens, body.model, excluding);
         const prompts = await formattingMessages(body.messages, key);
         const generateParams = prepareGenerateParams(body.model, prompts, body);
-        
+
         try {
             if(body.stream)
                 result = await handleStream(key, body.model, generateParams);
@@ -531,6 +523,7 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
             if (e instanceof ApiError) {
                 // 重试
                 excluding.add(key);
+                result = e.message;
                 continue;
             }
 
