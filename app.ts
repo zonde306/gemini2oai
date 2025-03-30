@@ -455,7 +455,7 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
             })}\n\n`));
 
             if(totalTokenCount) {
-                console.log(`[output] total ${totalTokenCount} tokens used and ${cachedContentTokenCount} cached (input ${promptTokenCount}, output ${candidatesTokenCount}).`);
+                console.log(`[output] total ${totalTokenCount} tokens used with model ${model} (input ${promptTokenCount}, output ${candidatesTokenCount}).`);
             }
         } catch (e) {
             console.error(e);
@@ -499,7 +499,7 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
         }
 
         if(response.usageMetadata?.totalTokenCount) {
-            console.log(`[output] total ${response.usageMetadata?.totalTokenCount} tokens used and ${response.usageMetadata?.cachedContentTokenCount} cached (input ${response.usageMetadata?.promptTokenCount}, output ${response.usageMetadata?.candidatesTokenCount}).`);
+            console.log(`[output] total ${response.usageMetadata?.totalTokenCount} tokens used with model ${model} (input ${response.usageMetadata?.promptTokenCount}, output ${response.usageMetadata?.candidatesTokenCount}).`);
         }
 
         const text = thought + response.text;
@@ -555,7 +555,7 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
         const prompts = await formattingMessages(body.messages, endpoint);
         const generateParams = prepareGenerateParams(body.model, prompts, body);
         const counter = await endpoint.models.countTokens(generateParams);
-        console.log(`[input] total ${counter.totalTokens} tokens used and ${counter.cachedContentTokenCount} cached.`);
+        console.log(`[input] total ${counter.totalTokens} tokens used with model ${body.model}.`);
 
         // @ts-expect-error: 7053
         if(counter.totalTokens && AVAIABLE_MODELS[body.model].input < counter.totalTokens) {
