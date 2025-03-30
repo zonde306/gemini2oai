@@ -419,6 +419,11 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
                         index: 0,
                         delta: text ? { content: text } : { role: "assistant" },
                     }],
+                    usage: {
+                        prompt_tokens: chunk?.usageMetadata?.promptTokenCount,
+                        completion_tokens: chunk?.usageMetadata?.candidatesTokenCount,
+                        total_tokens: chunk?.usageMetadata?.totalTokenCount,
+                    },
                 })}\n\n`));
 
                 totalTokenCount = chunk?.usageMetadata?.totalTokenCount || totalTokenCount;
@@ -498,14 +503,19 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
             object: "chat.completion",
             created: new Date(response.createTime || Date.now()).getTime(),
             model: model,
-            "choices": [{
+            choices: [{
                 "index": 0,
                 "message": {
                     "role": "assistant",
                     "content": text,
                 },
                 "finish_reason": "stop",
-            }]
+            }],
+            usage: {
+                prompt_tokens: response?.usageMetadata?.promptTokenCount,
+                completion_tokens: response?.usageMetadata?.candidatesTokenCount,
+                total_tokens: response?.usageMetadata?.totalTokenCount,
+            },
         });
     } catch (e) {
         console.error(e);
