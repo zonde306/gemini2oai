@@ -1,6 +1,7 @@
 {
   "dependencies": {
     "@google/genai": "^0.7.0",
-    "deno": "^2.2.6"
+    "deno": "^2.2.6",
+    "lodash": "^4.17.21"
   }
 }
