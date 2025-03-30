@@ -1,4 +1,4 @@
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold, GenerateContentResponse, GenerateContentParameters } from "npm:@google/genai";
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold, GenerateContentResponse, GenerateContentParameters, ContentListUnion } from "npm:@google/genai";
 import { Buffer } from "node:buffer";
 import _ from "npm:lodash";
 
@@ -203,14 +203,14 @@ interface GeneratePrompt {
     data?: string;
 }
 
-async function uploadFile(urlOrData: string, _toekn: string) : Promise<{ data: string, mime: string }> {
+async function uploadFile(urlOrData: string, _ep : GoogleGenAI) : Promise<{ data: string, mime: string }> {
     if(urlOrData.startsWith("http") || urlOrData.startsWith("ftp")) {
         // URL
         const response = await fetch(urlOrData);
         const data = await response.arrayBuffer();
         const mime = response.headers.get("Content-Type") || "application/octet-stream";
         if(data.byteLength > MAX_FILE_SIZE) {
-            // TODO: 使用 GoogleGenAI.files.upload 上传大文件
+            // TODO: 使用 _ep.files.upload 上传大文件
             throw new ResponseError("File too large", { status: 413 });
         }
 
@@ -223,7 +223,7 @@ async function uploadFile(urlOrData: string, _toekn: string) : Promise<{ data: s
         const [ mime, data ] = urlOrData.split(";base64,", 1);
         const bolb = Buffer.from(data, "base64");
         if(bolb.byteLength > MAX_FILE_SIZE) {
-            // TODO: 使用 GoogleGenAI.files.upload 上传大文件
+            // TODO: 使用 _ep.files.upload 上传大文件
             throw new ResponseError("File too large", { status: 413 });
         }
         
@@ -234,13 +234,13 @@ async function uploadFile(urlOrData: string, _toekn: string) : Promise<{ data: s
     }
 }
 
-async function formattingMessages(messages: { role: string, content: unknown }[], toekn: string) : Promise<GeneratePrompt[]> {
+async function formattingMessages(messages: { role: string, content: unknown }[], ep : GoogleGenAI) : Promise<ContentListUnion> {
     const results : GeneratePrompt[] = [];
     for(const msg of messages) {
         if(Array.isArray(msg.content)) {
             for(const inner of msg.content) {
                 if(inner.image_url) {
-                    const { data, mime } = await uploadFile(inner.image_url.url, toekn);
+                    const { data, mime } = await uploadFile(inner.image_url.url, ep);
                     results.push({ mime: mime, data: data });
                 } else if(typeof inner === "string") {
                     results.push({ text: msg.role ? `${msg.role}: ${inner}` : inner });
@@ -257,7 +257,12 @@ async function formattingMessages(messages: { role: string, content: unknown }[]
         }
     }
 
-    return results;
+    // @ts-expect-error: 2339
+    return results.map(x => _.merge(
+        {},
+        x.text ? { text: x.text } : {},
+        x.mime && x.data ? { inlineData: { mimeType: x.mime, data: x.data } } : {}
+    ));
 }
 
 function models() : Response {
@@ -277,14 +282,13 @@ interface GenerateOptions {
     top_k?: number;
 }
 
-function prepareGenerateParams(model: string, prompts: GeneratePrompt[], options: GenerateOptions = {}) : GenerateContentParameters {
+function prepareGenerateParams(model: string, prompts: ContentListUnion, options: GenerateOptions = {}) : GenerateContentParameters {
     // @ts-expect-error: 7053
     const modelConfig = AVAIABLE_MODELS[model];
 
     return {
         model: model,
-        // @ts-expect-error: 2339
-        contents: prompts.map(x => _.merge({}, x.text ? { text: x.text } : {}, x.mime && x.data ? { inlineData: { mimeType: x.mime, data: x.data } } : {})),
+        contents: prompts,
         config: {
             // 禁用审查
             safetySettings: [
@@ -322,8 +326,7 @@ function prepareGenerateParams(model: string, prompts: GeneratePrompt[], options
     };
 }
 
-async function handleStream(key: string, model: string, generateParams: GenerateContentParameters) {
-    const ep = new GoogleGenAI({ apiKey: key });
+async function handleStream(ep : GoogleGenAI, model: string, generateParams: GenerateContentParameters) {
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
@@ -459,9 +462,7 @@ async function handleStream(key: string, model: string, generateParams: Generate
     return readable;
 }
 
-async function handleNonStream(key: string, model: string, generateParams: GenerateContentParameters) {
-    const ep = new GoogleGenAI({ apiKey: key });
-
+async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: GenerateContentParameters) {
     try {
         const response = await ep.models.generateContent(generateParams);
 
@@ -510,20 +511,28 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
     let result = null;
 
     for(let i = 0; i < tokens.length; i++) {
-        const key = await getBestToken(tokens, body.model, excluding);
-        const prompts = await formattingMessages(body.messages, key);
+        const token = await getBestToken(tokens, body.model, excluding);
+        const endpoint = new GoogleGenAI({ apiKey: token });
+        const prompts = await formattingMessages(body.messages, endpoint);
         const generateParams = prepareGenerateParams(body.model, prompts, body);
+        const counter = await endpoint.models.countTokens(generateParams);
+        console.log(`total ${counter.totalTokens} tokens used and ${counter.cachedContentTokenCount} cached.`);
+
+        // @ts-expect-error: 7053
+        if(counter.totalTokens && AVAIABLE_MODELS[body.model].input < counter.totalTokens) {
+            throw new ResponseError("too many input tokens", { status: 413 });
+        }
 
         try {
             if(body.stream)
-                result = await handleStream(key, body.model, generateParams);
+                result = await handleStream(endpoint, body.model, generateParams);
             else
-                result = await handleNonStream(key, body.model, generateParams);
+                result = await handleNonStream(endpoint, body.model, generateParams);
         } catch(e) {
             if (e instanceof ApiError) {
                 // 重试
-                excluding.add(key);
-                result = e.message;
+                excluding.add(token);
+                result = e;
                 continue;
             }
 
@@ -531,6 +540,9 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
             return new Response(e.message, { status: 400 });
         }
     }
+
+    if(result instanceof Error)
+        return new Response(result.message, { status: 500 });
     
     return new Response(result, { headers });
 }
