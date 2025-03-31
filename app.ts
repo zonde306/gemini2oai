@@ -76,15 +76,22 @@ async function getBestToken(tokens: string[], model: string, excluding: Set<stri
     }
 
     const now = Date.now();
-    const rpm = (await db.getMany(tokens.map(x => [ "gemini", "rpm", model, hash(x) ])))
-                    .map(x => x.value as number[] || [])
-                    .map(x => x.filter(t => t > now));
+    let usages : number[][] = [];
 
-    const rpmIndex = rpm.map(x => x.length);
+    // db.getMany 上限为 10，超过则需要分批查询
+    for(let i = 0; i < tokens.length / 10; i++) {
+        usages = usages.concat(
+            (await db.getMany(tokens.slice(10 * i, 10 * (i + 1)).map(x => [ "gemini", "rpm", model, hash(x) ])))
+                .map(x => x.value as number[] || [])
+                .map(x => x.filter(t => t > now))
+        );
+    }
+    
+    const usageIndexes = usages.map(x => x.length);
     // @ts-expect-error: 2339
-    const index = rpmIndex.indexOf(_.min(rpmIndex));
-    rpm[index].push(now + 60 * 1000);
-    await db.set([ "gemini", "rpm", model, hash(tokens[index]) ], rpm[index], { expireIn: 60 * 1000 });
+    const index = usageIndexes.indexOf(_.min(usageIndexes));
+    usages[index].push(now + 60 * 1000);
+    await db.set([ "gemini", "rpm", model, hash(tokens[index]) ], usages[index], { expireIn: 60 * 1000 });
     return tokens[index];
 }
 
@@ -489,7 +496,7 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
                             index: 0,
                             delta: {
                                 role: "assistant",
-                                content: `ERROR: input prompt was blocked, reason: ${lastChunk?.promptFeedback?.blockReason}\n${JSON.stringify(lastChunk)}`,
+                                content: `ERROR: output prompt was blocked, reason: ${lastChunk?.promptFeedback?.blockReason}\n${JSON.stringify(lastChunk)}`,
                             },
                             finish_reason: lastChunk?.candidates?.[0]?.finishReason || "error",
                         }]
@@ -549,7 +556,7 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
                         index: 0,
                         message: {
                             role: "assistant",
-                            content: `ERROR: input prompt was blocked, reason: ${response.promptFeedback?.blockReason}\n${JSON.stringify(response)}`,
+                            content: `ERROR: output prompt was blocked, reason: ${response.promptFeedback?.blockReason}\n${JSON.stringify(response)}`,
                         },
                         finish_reason: response?.candidates?.[0]?.finishReason || "stop",
                     }],
