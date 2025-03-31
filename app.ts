@@ -118,8 +118,56 @@ async function uploadFile(urlOrData: string, _ep : GoogleGenAI) : Promise<{ data
     }
 }
 
-async function formattingMessages(messages: { role: string, content: unknown }[], ep : GoogleGenAI) : Promise<ContentListUnion> {
+interface FeatureInfo {
+    role: Record<string, string>;
+    removeRole: boolean;
+    systemPrompt: string;
+    content: string;
+}
+
+function processMessageContent(content: string, defaults?: FeatureInfo) : FeatureInfo {
+    const feat : FeatureInfo = defaults || {
+        role: {
+            user: "Human",
+            assistant: "Model",
+            system: "System",
+        },
+        removeRole: false,
+        systemPrompt: "",
+        content: content,
+    };
+    feat.content = content;
+
+    const roleInfo = /<roleInfo>([\s\S]*)<\/roleInfo>/.exec(feat.content);
+    if(roleInfo) {
+        feat.content = feat.content.replace(roleInfo[0], "");
+        for(let line of roleInfo[1].split("\n")) {
+            line = line.trim();
+            if(!line || !line.includes(":"))
+                continue;
+
+            const [ role, name ] = line.split(":");
+            feat.role[role.trim().toLowerCase()] = name.trim();
+        }
+    }
+
+    const systemPrompt = /<systemPrompt>([\s\S]*)<\/systemPrompt>/.exec(feat.content);
+    if(systemPrompt) {
+        feat.content = feat.content.replace(systemPrompt[0], "");
+        feat.systemPrompt = systemPrompt[1].trim();
+    }
+
+    if(feat.content.includes("<|removeRole|>")) {
+        feat.removeRole = true;
+        feat.content = feat.content.replace("<|removeRole|>", "");
+    }
+
+    return feat;
+}
+
+async function formattingMessages(messages: { role: string, content: unknown }[], ep : GoogleGenAI) : Promise<{ prompts: ContentListUnion, systemPrompt: string }> {
     const results : GeneratePrompt[] = [];
+    let feat = processMessageContent("");
     for(const msg of messages) {
         if(Array.isArray(msg.content)) {
             for(const inner of msg.content) {
@@ -127,26 +175,31 @@ async function formattingMessages(messages: { role: string, content: unknown }[]
                     const { data, mime } = await uploadFile(inner.image_url.url, ep);
                     results.push({ mime: mime, data: data });
                 } else if(typeof inner === "string") {
-                    results.push({ text: msg.role ? `${msg.role}: ${inner}` : inner });
+                    feat = processMessageContent(inner, feat);
+                    results.push({ text: feat.removeRole ? feat.content : `${feat.role[msg.role]}: ${feat.content}` });
                 } else {
                     console.error("unknown content type", inner);
                     throw new ResponseError("Unknown content type", { status: 422 });
                 }
             }
         } else if (typeof msg.content === "string") {
-            results.push({ text: msg.role ? `${msg.role}: ${msg.content}` : msg.content });
+            feat = processMessageContent(msg.content, feat);
+            results.push({ text: feat.removeRole ? feat.content : `${feat.role[msg.role]}: ${feat.content}` });
         } else {
             console.error("unknown content type", msg.content);
             throw new ResponseError("Unknown content type", { status: 422 });
         }
     }
 
-    // @ts-expect-error: 2339
-    return results.map(x => _.merge(
-        {},
-        x.text ? { text: x.text } : {},
-        x.mime && x.data ? { inlineData: { mimeType: x.mime, data: x.data } } : {}
-    ));
+    return {
+        // @ts-expect-error: 2339
+        prompts: results.map(x => _.merge(
+            {},
+            x.text ? { text: x.text } : {},
+            x.mime && x.data ? { inlineData: { mimeType: x.mime, data: x.data } } : {}
+        )),
+        systemPrompt: feat.systemPrompt,
+    };
 }
 
 interface ModelInfo {
@@ -206,7 +259,7 @@ async function fetchModels(token: string, cache: boolean = true) : Promise<Model
 async function listModels(tokens: string[]) : Promise<Response> {
     return new Response(JSON.stringify({
         object: "list",
-        data: await fetchModels(tokens[0], false),
+        data: await fetchModels(tokens[0]),
     }), { status: 200 });
 }
 
@@ -218,6 +271,7 @@ interface GenerateOptions {
     temperature?: number;
     top_p?: number;
     top_k?: number;
+    systemPrompt?: string;
 }
 
 async function prepareGenerateParams(model: string, prompts: ContentListUnion, options: GenerateOptions = {}) : Promise<GenerateContentParameters> {
@@ -256,8 +310,9 @@ async function prepareGenerateParams(model: string, prompts: ContentListUnion, o
             topP: options.top_p,
             maxOutputTokens: Math.min(options.max_tokens || modelConfig.output, modelConfig.output),
             topK: options.top_k,
-            frequencyPenalty: options.frequency_penalty,
-            presencePenalty: options.presence_penalty,
+            // frequencyPenalty: options.frequency_penalty,
+            // presencePenalty: options.presence_penalty,
+            systemInstruction: options.systemPrompt,
 
             // 只有部分模型支持的参数
             ...(options.include_reasoning ? { includeThoughts: true } : {}),
@@ -501,8 +556,8 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
     for(let i = 0; i < tokens.length; i++) {
         const token = await getBestToken(tokens, body.model, excluding);
         const endpoint = new GoogleGenAI({ apiKey: token });
-        const prompts = await formattingMessages(body.messages, endpoint);
-        const generateParams = await prepareGenerateParams(body.model, prompts, body);
+        const { prompts, systemPrompt } = await formattingMessages(body.messages, endpoint);
+        const generateParams = await prepareGenerateParams(body.model, prompts, { ...body, systemPrompt });
         const counter = await endpoint.models.countTokens(generateParams);
         console.log(`[input] total ${counter.totalTokens} tokens used with model ${body.model} on ${i + 1} times.`);
         const modelInfo = (await fetchModels(token)).find(x => x.id === body.model || x.name === body.model || x.displayName === body.model);
