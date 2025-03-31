@@ -1,4 +1,4 @@
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold, GenerateContentResponse, GenerateContentParameters, ContentListUnion } from "npm:@google/genai";
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold, GenerateContentResponse, GenerateContentParameters, ContentListUnion, CountTokensResponse } from "npm:@google/genai";
 import { Buffer } from "node:buffer";
 import _ from "npm:lodash";
 
@@ -61,6 +61,10 @@ function getTokens(request: Request) : string[] {
 }
 
 async function getBestToken(tokens: string[], model: string, excluding: Set<string> = new Set<string>()) : Promise<string> {
+    tokens = tokens.filter(x => !excluding.has(x));
+    if(tokens.length <= 0)
+        throw new ResponseError("No avaiable Key", { status: 400 });
+    
     const models = await fetchModels(tokens[0]);
     const modelInfo = models.find(x => x.id === model || x.name === model || x.displayName === model);
     if(modelInfo == null) {
@@ -71,14 +75,17 @@ async function getBestToken(tokens: string[], model: string, excluding: Set<stri
         return s.split("").reduce(function(a,b){a=((a<<5)-a)+b.charCodeAt(0);return a&a},0);
     }
 
-    const hashedId = hash(tokens.join(","));
-    tokens = tokens.filter(x => !excluding.has(x));
-    if(tokens.length <= 0)
-        throw new ResponseError("No avaiable Key", { status: 400 });
+    const now = Date.now();
+    const rpm = (await db.getMany(tokens.map(x => [ "gemini", "rpm", model, hash(x) ])))
+                    .map(x => x.value as number[] || [])
+                    .map(x => x.filter(t => t > now));
 
-    const poll = ((await db.get([ "gemini", "poll", model, hashedId ]))?.value ?? 0) as number;
-    await db.set([ "gemini", "poll", model, hashedId ], poll + 1, { expireIn: 60 * 60 * 24 * 1000 });
-    return tokens[poll % tokens.length];
+    const rpmIndex = rpm.map(x => x.length);
+    // @ts-expect-error: 2339
+    const index = rpmIndex.indexOf(_.min(rpmIndex));
+    rpm[index].push(now + 60 * 1000);
+    await db.set([ "gemini", "rpm", model, hash(tokens[index]) ], rpm[index], { expireIn: 60 * 1000 });
+    return tokens[index];
 }
 
 interface GeneratePrompt {
@@ -612,7 +619,15 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
         const endpoint = new GoogleGenAI({ apiKey: token });
         const { prompts, systemPrompt } = await formattingMessages(body.messages, endpoint);
         const generateParams = await prepareGenerateParams(body.model, prompts, { ...body, systemPrompt });
-        const counter = await endpoint.models.countTokens(generateParams);
+        let counter : CountTokensResponse;
+
+        try {
+            counter = await endpoint.models.countTokens(generateParams);
+        } catch(e) {
+            // @ts-expect-error: 18046
+            return new Response(`Invalid API Key for #${token.indexOf(token)}: ${e.message}`, { status: 400 });
+        }
+
         console.log(`[input] total ${counter.totalTokens} tokens used with model ${body.model} on ${i + 1} times.`);
         const modelInfo = (await fetchModels(token)).find(x => x.id === body.model || x.name === body.model || x.displayName === body.model);
         if(!modelInfo || (counter.totalTokens && modelInfo.input && counter.totalTokens > modelInfo.input)) {
@@ -624,6 +639,7 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
                 result = await handleStream(endpoint, body.model, generateParams);
             else
                 result = await handleNonStream(endpoint, body.model, generateParams);
+            break;
         } catch(e) {
             if (e instanceof ApiError) {
                 // 重试
@@ -633,12 +649,14 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
             }
 
             // @ts-expect-error: 18046
-            return new Response(e.message, { status: 400 });
+            return new Response(e.cause?.message || e.message, { status: 400 });
         }
     }
 
-    if(result instanceof Error)
-        return new Response(result.message, { status: 500 });
+    if(result instanceof Error) {
+        // @ts-expect-error: 18046
+        return new Response(result.cause?.message || result.message, { status: 400 });
+    }
     
     return new Response(result, { headers });
 }
@@ -667,7 +685,7 @@ async function handler(request: Request) : Promise<Response> {
 
         console.error(e);
         // @ts-expect-error: 18046
-        return new Response(e.message, { status: 500 });
+        return new Response(e.cause?.message || e.message, { status: 500 });
     }
 
     return new Response("hello world!", { status: 200 });
