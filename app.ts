@@ -313,9 +313,13 @@ async function prepareGenerateParams(model: string, prompts: ContentListUnion, o
             topP: options.top_p,
             maxOutputTokens: Math.min(options.max_tokens || modelConfig.output, modelConfig.output),
             topK: options.top_k,
-            // frequencyPenalty: options.frequency_penalty,
-            // presencePenalty: options.presence_penalty,
-            // systemInstruction: options.systemPrompt,
+
+            /*
+            // 这些参数都不支持
+            frequencyPenalty: options.frequency_penalty,
+            presencePenalty: options.presence_penalty,
+            systemInstruction: options.systemPrompt,
+            */
 
             // 只有部分模型支持的参数
             ...(options.include_reasoning ? { includeThoughts: true } : {}),
@@ -329,7 +333,7 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
     const encoder = new TextEncoder();
 
     let streaming : AsyncGenerator<GenerateContentResponse>;
-    let responseId : string = crypto.randomUUID();
+    const responseId : string = crypto.randomUUID();
     try {
         streaming = await ep.models.generateContentStream(generateParams);
     } catch (e) {
@@ -341,7 +345,6 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
 
     // 后台运行
     (async function() {
-        // console.debug("stream start");
         
         try {
             let thinking = false;
@@ -351,11 +354,24 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
             let cachedContentTokenCount = 0;
             let lastChunk = null;
 
+            // 防超时
+            await writer.write(encoder.encode(`data: ${JSON.stringify({
+                id: responseId,
+                object: "chat.completion.chunk",
+                created: Date.now(),
+                model: model,
+                choices: [{
+                    index: 0,
+                    delta: {
+                        role: "assistant",
+                        content: "",
+                    }
+                }]
+            })}\n\n`));
+
             // 流式传输
             for await (const chunk of streaming) {
                 const text = chunk.text;
-                responseId = chunk.responseId || responseId;
-                // console.debug(`stream ${responseId} chunk: ${text}`);
                 lastChunk = chunk;
 
                 if(chunk.candidates?.[0]?.content?.parts?.[0]?.thought) {
@@ -466,7 +482,7 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
                             index: 0,
                             delta: {
                                 role: "assistant",
-                                content: `ERROR: input prompt was blocked, reason: ${lastChunk?.candidates?.[0]?.finishReason}\n${JSON.stringify(lastChunk)}`,
+                                content: `ERROR: input prompt was blocked, reason: ${lastChunk?.promptFeedback?.blockReason}\n${JSON.stringify(lastChunk)}`,
                             },
                             finish_reason: lastChunk?.candidates?.[0]?.finishReason || "error",
                         }]
@@ -496,7 +512,6 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
 
         await writer.write(encoder.encode("data: [DONE]\n\n"));
         await writer.close();
-        // console.debug("stream done");
     })();
 
     return readable;
@@ -527,7 +542,7 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
                         index: 0,
                         message: {
                             role: "assistant",
-                            content: `ERROR: input prompt was blocked, reason: ${response.candidates?.[0]?.finishReason}\n${JSON.stringify(response)}`,
+                            content: `ERROR: input prompt was blocked, reason: ${response.promptFeedback?.blockReason}\n${JSON.stringify(response)}`,
                         },
                         finish_reason: response?.candidates?.[0]?.finishReason || "stop",
                     }],
@@ -547,7 +562,6 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
         }
 
         const text = thought + response.text;
-        // console.debug(`non stream ${response.responseId} content: ${text}`);
         return JSON.stringify({
             id: response.responseId || crypto.randomUUID(),
             object: "chat.completion",
