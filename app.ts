@@ -151,11 +151,14 @@ function processMessageContent(content: string, defaults?: FeatureInfo) : Featur
         }
     }
 
+    /*
+    // systemInstruction parameter is not supported in Gemini API.
     const systemPrompt = /<systemPrompt>([\s\S]*)<\/systemPrompt>/.exec(feat.content);
     if(systemPrompt) {
         feat.content = feat.content.replace(systemPrompt[0], "");
         feat.systemPrompt = systemPrompt[1].trim();
     }
+    */
 
     if(feat.content.includes("<|removeRole|>")) {
         feat.removeRole = true;
@@ -312,7 +315,7 @@ async function prepareGenerateParams(model: string, prompts: ContentListUnion, o
             topK: options.top_k,
             // frequencyPenalty: options.frequency_penalty,
             // presencePenalty: options.presence_penalty,
-            systemInstruction: options.systemPrompt,
+            // systemInstruction: options.systemPrompt,
 
             // 只有部分模型支持的参数
             ...(options.include_reasoning ? { includeThoughts: true } : {}),
@@ -325,10 +328,10 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
 
-    let response : AsyncGenerator<GenerateContentResponse>;
+    let streaming : AsyncGenerator<GenerateContentResponse>;
     let responseId : string = crypto.randomUUID();
     try {
-        response = await ep.models.generateContentStream(generateParams);
+        streaming = await ep.models.generateContentStream(generateParams);
     } catch (e) {
         console.error(e);
 
@@ -349,7 +352,7 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
             let lastChunk = null;
 
             // 流式传输
-            for await (const chunk of response) {
+            for await (const chunk of streaming) {
                 const text = chunk.text;
                 responseId = chunk.responseId || responseId;
                 // console.debug(`stream ${responseId} chunk: ${text}`);
@@ -454,7 +457,20 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
             if(totalTokenCount) {
                 console.log(`[output] total ${totalTokenCount} tokens used with model ${model} (input ${promptTokenCount}, output ${candidatesTokenCount}).`);
                 if(!candidatesTokenCount || candidatesTokenCount <= 1) {
-                    console.info(lastChunk);
+                    await writer.write(encoder.encode(`data: ${JSON.stringify({
+                        id: responseId,
+                        object: "chat.completion.chunk",
+                        created: Date.now(),
+                        model: model,
+                        choices: [{
+                            index: 0,
+                            delta: {
+                                role: "assistant",
+                                content: `ERROR: input prompt was blocked, reason: ${lastChunk?.candidates?.[0]?.finishReason}\n${JSON.stringify(lastChunk)}`,
+                            },
+                            finish_reason: lastChunk?.candidates?.[0]?.finishReason || "error",
+                        }]
+                    })}\n\n`));
                 }
             }
         } catch (e) {
@@ -502,7 +518,31 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
             console.log(`[output] total ${response.usageMetadata?.totalTokenCount} tokens used with model ${model} (input ${response.usageMetadata?.promptTokenCount}, output ${response.usageMetadata?.candidatesTokenCount}).`);
             const candidatesTokenCount = response?.usageMetadata?.candidatesTokenCount;
             if(!candidatesTokenCount || candidatesTokenCount <= 1) {
-                console.info(response);
+                return JSON.stringify({
+                    id: response.responseId || crypto.randomUUID(),
+                    object: "chat.completion",
+                    created: new Date(response.createTime || Date.now()).getTime(),
+                    model: model,
+                    choices: [{
+                        index: 0,
+                        message: {
+                            role: "assistant",
+                            content: `ERROR: input prompt was blocked, reason: ${response.candidates?.[0]?.finishReason}\n${JSON.stringify(response)}`,
+                        },
+                        finish_reason: response?.candidates?.[0]?.finishReason || "stop",
+                    }],
+                    usage: {
+                        prompt_tokens: response?.usageMetadata?.promptTokenCount,
+                        completion_tokens: response?.usageMetadata?.candidatesTokenCount,
+                        total_tokens: response?.usageMetadata?.totalTokenCount,
+                        prompt_tokens_details: {
+                            cached_tokens: response?.usageMetadata?.cachedContentTokenCount,
+                        },
+                        completion_tokens_details: {
+                            reasoning_tokens: response?.usageMetadata?.thoughtsTokenCount,
+                        },
+                    },
+                });
             }
         }
 
@@ -514,12 +554,12 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
             created: new Date(response.createTime || Date.now()).getTime(),
             model: model,
             choices: [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": text,
+                index: 0,
+                message: {
+                    role: "assistant",
+                    content: text,
                 },
-                "finish_reason": response?.candidates?.[0]?.finishReason || "stop",
+                finish_reason: response?.candidates?.[0]?.finishReason || "stop",
             }],
             usage: {
                 prompt_tokens: response?.usageMetadata?.promptTokenCount,
