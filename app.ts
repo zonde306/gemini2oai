@@ -609,6 +609,59 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
     }
 }
 
+async function handleFakeStream(ep : GoogleGenAI, model: string, generateParams: GenerateContentParameters) {
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
+    const responseId : string = crypto.randomUUID();
+
+    // 防超时用
+    const keepAlive = setInterval(() => {
+        writer.write(encoder.encode(`data: ${JSON.stringify({
+            id: responseId,
+            object: "chat.completion.chunk",
+            created: Date.now(),
+            model: model,
+            choices: [{
+                index: 0,
+                delta: {
+                    role: "assistant",
+                    content: "",
+                }
+            }]
+        })}\n\n`));
+    }, 1000);
+
+    (async() => {
+        try {
+            const response = JSON.parse(await handleNonStream(ep, model, generateParams));
+            writer.write(encoder.encode(`data: ${JSON.stringify({
+                id: responseId,
+                object: "chat.completion.chunk",
+                created: Date.now(),
+                model: model,
+                choices: [{
+                    index: 0,
+                    delta: {
+                        role: "assistant",
+                        content: response.choices[0].message.content,
+                    },
+                    finish_reason: response.choices[0].finish_reason,
+                }],
+                usage: response.usage,
+            })}\n\n`));
+        } catch(e) {
+            throw e;
+        } finally {
+            clearInterval(keepAlive);
+            await writer.write(encoder.encode("data: [DONE]\n\n"));
+            await writer.close();
+        }
+    })();
+
+    return readable;
+}
+
 async function chatCompletions(request: Request, tokens: string[]) : Promise<Response> {
     const headers = new Headers({
         "Content-Type": "text/event-stream",
@@ -642,7 +695,9 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
         }
 
         try {
-            if(body.stream)
+            if(body.stream && body.fake_stream)
+                result = await handleFakeStream(endpoint, body.model, generateParams);
+            else if(body.stream)
                 result = await handleStream(endpoint, body.model, generateParams);
             else
                 result = await handleNonStream(endpoint, body.model, generateParams);
