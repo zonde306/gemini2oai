@@ -651,6 +651,21 @@ async function handleFakeStream(ep : GoogleGenAI, model: string, generateParams:
                 usage: response.usage,
             })}\n\n`));
         } catch(e) {
+            writer.write(encoder.encode(`data: ${JSON.stringify({
+                id: responseId,
+                object: "chat.completion.chunk",
+                created: Date.now(),
+                model: model,
+                choices: [{
+                    index: 0,
+                    delta: {
+                        role: "assistant",
+                        // @ts-expect-error: 18046
+                        content: `ERROR: ${e.message}`,
+                    },
+                    finish_reason: "error",
+                }]
+            })}\n\n`));
             throw e;
         } finally {
             clearInterval(keepAlive);
