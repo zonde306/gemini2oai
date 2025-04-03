@@ -351,7 +351,8 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
     try {
         streaming = await ep.models.generateContentStream(generateParams);
     } catch (e) {
-        console.error(e);
+        // @ts-expect-error: 18046
+        console.error(e.message);
 
         // @ts-expect-error: 18046
         throw new ApiError(e.message, { cause: e });
@@ -496,15 +497,16 @@ async function handleStream(ep : GoogleGenAI, model: string, generateParams: Gen
                             index: 0,
                             delta: {
                                 role: "assistant",
-                                content: `ERROR: output prompt was blocked, reason: ${lastChunk?.promptFeedback?.blockReason}\n${JSON.stringify(lastChunk)}`,
+                                content: `ERROR: prompt was blocked, reason: ${lastChunk?.promptFeedback?.blockReason || lastChunk?.candidates?.[0]?.finishReason}\n${JSON.stringify(lastChunk)}`,
                             },
-                            finish_reason: lastChunk?.candidates?.[0]?.finishReason || "error",
+                            finish_reason: lastChunk?.promptFeedback?.blockReason || lastChunk?.candidates?.[0]?.finishReason || "error",
                         }]
                     })}\n\n`));
                 }
             }
         } catch (e) {
-            console.error(e);
+            // @ts-expect-error: 18046
+            console.error(e.message);
 
             // 错误输出
             await writer.write(encoder.encode(`data: ${JSON.stringify({
@@ -556,9 +558,9 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
                         index: 0,
                         message: {
                             role: "assistant",
-                            content: `ERROR: output prompt was blocked, reason: ${response.promptFeedback?.blockReason}\n${JSON.stringify(response)}`,
+                            content: `ERROR: prompt was blocked, reason: ${response.promptFeedback?.blockReason || response?.candidates?.[0]?.finishReason}\n${JSON.stringify(response)}`,
                         },
-                        finish_reason: response?.candidates?.[0]?.finishReason || "stop",
+                        finish_reason: response?.candidates?.[0]?.finishReason || response.promptFeedback?.blockReason || "stop",
                     }],
                     usage: {
                         prompt_tokens: response?.usageMetadata?.promptTokenCount,
@@ -602,7 +604,8 @@ async function handleNonStream(ep : GoogleGenAI, model: string, generateParams: 
             },
         });
     } catch (e) {
-        console.error(e);
+        // @ts-expect-error: 18046
+        console.error(e.message);
 
         // @ts-expect-error: 18046
         throw new ApiError(e.message, { cause: e });
@@ -630,7 +633,7 @@ async function handleFakeStream(ep : GoogleGenAI, model: string, generateParams:
                 }
             }]
         })}\n\n`));
-    }, 1000);
+    }, 5000);
 
     (async() => {
         try {
@@ -760,7 +763,8 @@ async function handler(request: Request) : Promise<Response> {
             return e.response;
         }
 
-        console.error(e);
+        // @ts-expect-error: 18046
+        console.error(e.message);
         // @ts-expect-error: 18046
         return new Response(e.cause?.message || e.message, { status: 500 });
     }
