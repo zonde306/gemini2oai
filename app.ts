@@ -249,7 +249,7 @@ async function fetchModels(token: string, cache: boolean = true) : Promise<Model
 
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${token}&pageSize=1000`);
     if(!response.ok)
-        return [];
+        throw new ResponseError(`Failed to fetch models with ${token}, info: ${await response.json()}`, { status: response.status });
 
     const data : { models: ModelInfo[] } = await response.json();
     if(!data.models || data.models.length <= 0)
@@ -269,14 +269,15 @@ async function fetchModels(token: string, cache: boolean = true) : Promise<Model
     }).filter(x => x.supportedGenerationMethods?.includes("generateMessage") || x.supportedGenerationMethods?.includes("generateContent"));
 
     await db.set([ "gemini", "models" ], MODELS, { expireIn: 7 * 60 * 60 * 24 * 1000 });
-    console.log(MODELS);
+    // console.log(MODELS);
     return MODELS;
 }
 
 async function listModels(tokens: string[]) : Promise<Response> {
     return new Response(JSON.stringify({
         object: "list",
-        data: await fetchModels(tokens[0]),
+        // @ts-expect-error: 2339
+        data: _.sample(await Promise.all(tokens.map(x => fetchModels(x, false)))),
     }), { status: 200 });
 }
 
@@ -703,7 +704,7 @@ async function chatCompletions(request: Request, tokens: string[]) : Promise<Res
             counter = await endpoint.models.countTokens(generateParams);
         } catch(e) {
             // @ts-expect-error: 18046
-            return new Response(`Invalid API Key for #${token.indexOf(token)}: ${e.message}`, { status: 400 });
+            return new Response(`Invalid API Key for #${token}: ${e.message}`, { status: 400 });
         }
 
         console.log(`[input] total ${counter.totalTokens} tokens used with model ${body.model} on ${i + 1} times.`);
