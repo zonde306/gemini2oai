@@ -304,23 +304,23 @@ async function prepareGenerateParams(model: string, prompts: ContentListUnion, o
             safetySettings: [
                 {
                     category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-                    threshold: model.includes("gemini-2.0-flash-exp") ? HarmBlockThreshold.OFF : HarmBlockThreshold.BLOCK_NONE,
+                    threshold: HarmBlockThreshold.OFF,
                 },
                 {
                     category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                    threshold: model.includes("gemini-2.0-flash-exp") ? HarmBlockThreshold.OFF : HarmBlockThreshold.BLOCK_NONE,
+                    threshold: HarmBlockThreshold.OFF,
                 },
                 {
                     category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                    threshold: model.includes("gemini-2.0-flash-exp") ? HarmBlockThreshold.OFF : HarmBlockThreshold.BLOCK_NONE,
+                    threshold: HarmBlockThreshold.OFF,
                 },
                 {
                     category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                    threshold: model.includes("gemini-2.0-flash-exp") ? HarmBlockThreshold.OFF : HarmBlockThreshold.BLOCK_NONE,
+                    threshold: HarmBlockThreshold.OFF,
                 },
                 {
                     category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
-                    threshold: model.includes("gemini-2.0-flash-exp") ? HarmBlockThreshold.OFF : HarmBlockThreshold.BLOCK_NONE,
+                    threshold: HarmBlockThreshold.OFF,
                 },
             ],
             temperature: options.temperature,
