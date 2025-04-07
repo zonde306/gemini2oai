@@ -1,4 +1,4 @@
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold, GenerateContentResponse, GenerateContentParameters, ContentListUnion, CountTokensResponse } from "npm:@google/genai";
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold, GenerateContentResponse, GenerateContentParameters, ContentListUnion, CountTokensResponse, File } from "npm:@google/genai";
 import { Buffer } from "node:buffer";
 import _ from "npm:lodash";
 
@@ -220,7 +220,7 @@ class GenerateServe {
     async prepareGenerate(body: any) {
         const token = await this.getNextToken();
         const ep = new GoogleGenAI({ apiKey: token });
-        const { prompts, systemPrompt } = await this.formattingMessages(body.messages);
+        const { prompts, systemPrompt } = await this.formattingMessages(body.messages, ep);
         const generateParams = await this.prepareGenerateParams(body.model, prompts, { ...body, systemPrompt });
         let counter : CountTokensResponse;
 
@@ -277,15 +277,53 @@ class GenerateServe {
         return this._tokens[index];
     }
 
-    async uploadFile(urlOrData: string) : Promise<{ data: string, mime: string }> {
+    async uploadLargeFile(data: string | Blob | ArrayBuffer, mime: string, ep: GoogleGenAI) : Promise<{ uri: string, mimeType: string }> {
+        if(typeof data === "string")
+            data = new Buffer.Blob([ Buffer.from(data, "base64").buffer ]);
+        if(data instanceof ArrayBuffer)
+            data = new Blob([ data ]);
+        
+        const file = await ep.files.upload({
+            file: data,
+            config: {
+                mimeType: mime,
+            }
+        });
+
+        // wait for file to be uploaded
+        let fd : File | null = null;
+        while(file.name) {
+            fd = await ep.files.get({ name: file.name });
+            if(fd.state !== "PROCESSING")
+                break;
+
+            await new Promise(resolve => {
+                setTimeout(resolve, 1000);
+            });
+        }
+
+        if(!fd || fd.state === "FAILED" || !fd.uri || !fd.mimeType) {
+            throw new ResponseError("File upload failed", { status: 400 });
+        }
+
+        return {
+            uri: fd.uri,
+            mimeType: fd.mimeType,
+        };
+    }
+
+    async uploadFile(urlOrData: string, ep: GoogleGenAI) : Promise<{ data: string, mime: string }> {
         if(urlOrData.startsWith("http") || urlOrData.startsWith("ftp")) {
             // URL
             const response = await fetch(urlOrData);
             const data = await response.arrayBuffer();
             const mime = response.headers.get("Content-Type") || "application/octet-stream";
             if(data.byteLength > MAX_FILE_SIZE) {
-                // TODO: 使用 this._ep.files.upload 上传大文件
-                throw new ResponseError("File too large", { status: 413 });
+                const { uri, mimeType } = await this.uploadLargeFile(data, mime, ep);
+                return {
+                    data: uri,
+                    mime: mimeType,
+                };
             }
     
             return {
@@ -294,11 +332,14 @@ class GenerateServe {
             };
         } else {
             // data:image/jpeg;base64,...
-            const [ mime, data ] = urlOrData.split(";base64,", 1);
+            const [ mime, data ] = urlOrData.split(";base64,", 2);
             const bolb = Buffer.from(data, "base64");
             if(bolb.byteLength > MAX_FILE_SIZE) {
-                // TODO: 使用 this._ep.files.upload 上传大文件
-                throw new ResponseError("File too large", { status: 413 });
+                const { uri, mimeType } = await this.uploadLargeFile(bolb, mime, ep);
+                return {
+                    data: uri,
+                    mime: mimeType,
+                };
             }
             
             return {
@@ -351,17 +392,17 @@ class GenerateServe {
         return feat;
     }
 
-    async formattingMessages(messages: { role: string, content: unknown }[]) : Promise<{ prompts: ContentListUnion, systemPrompt: string }> {
+    async formattingMessages(messages: { role: string, content: unknown }[], ep : GoogleGenAI) : Promise<{ prompts: ContentListUnion, systemPrompt: string }> {
         const results : GeneratePrompt[] = [];
         let feat = this.processMessageContent("");
         for(const msg of messages) {
             if(Array.isArray(msg.content)) {
                 for(const inner of msg.content) {
-                    if(inner.image_url) {
-                        const { data, mime } = await this.uploadFile(inner.image_url.url);
+                    if(inner.type === "image_url" && inner.image_url) {
+                        const { data, mime } = await this.uploadFile(inner.image_url.url, ep);
                         results.push({ mime: mime, data: data });
-                    } else if(typeof inner === "string") {
-                        feat = this.processMessageContent(inner, feat);
+                    } else if(inner.type === "text" && inner.text) {
+                        feat = this.processMessageContent(inner.text, feat);
                         results.push({ text: feat.removeRole ? feat.content : `${feat.role[msg.role]}: ${feat.content}` });
                     } else {
                         console.error("unknown content type", inner);
