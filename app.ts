@@ -335,7 +335,7 @@ class GenerateServe {
             const [ mime, data ] = urlOrData.split(";base64,", 2);
             const bolb = Buffer.from(data, "base64");
             if(bolb.byteLength > MAX_FILE_SIZE) {
-                const { uri, mimeType } = await this.uploadLargeFile(bolb, mime, ep);
+                const { uri, mimeType } = await this.uploadLargeFile(bolb.buffer, mime, ep);
                 return {
                     data: uri,
                     mime: mimeType,
