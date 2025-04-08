@@ -44,10 +44,17 @@ function getAccessTokens(request: Request) : string[] {
         throw new ResponseError("Unauthorized", { status: 401 });
     }
 
+    const shuffle = request.headers.get("Shuffle") === "true";
+
     // 使用内置 API Key
     if(authorization === API_KEY) {
         if(TOKENS.length <= 0)
             throw new ResponseError("No API Key", { status: 400 });
+
+        if(shuffle) {
+            // @ts-expect-error: 2339
+            return _.shuffle(TOKENS);
+        }
         return TOKENS;
     }
 
@@ -55,6 +62,11 @@ function getAccessTokens(request: Request) : string[] {
     const api_key = authorization.split(",").map(x => x.trim()).filter(x => x.length > 0);
     if(api_key.length <= 0) {
         throw new ResponseError("No API Key", { status: 401 });
+    }
+
+    if(shuffle) {
+        // @ts-expect-error: 2339
+        return _.shuffle(api_key);
     }
 
     return api_key;
